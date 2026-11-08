@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Robot Controller</title>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #111;
+    color: #fff;
+    font-family: 'SF Pro Display', -apple-system, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* 상단 상태바 */
+  #statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #333;
+  }
+
+  #statusbar h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: #eee;
+  }
+
+  #conn-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  #conn-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #ff4444;
+    transition: background 0.3s;
+  }
+
+  #conn-dot.connected { background: #44ff88; box-shadow: 0 0 8px #44ff88; }
+
+  /* 값 표시 */
+  #values {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    padding: 10px;
+    background: #161616;
+    font-size: 13px;
+    color: #888;
+    border-bottom: 1px solid #2a2a2a;
+  }
+
+  #values span { color: #fff; font-weight: 600; }
+
+  /* 메인 조종 영역 */
+  #controls {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 20px;
+    position: relative;
+  }
+
+  /* 조이스틱 영역 */
+  .joystick-zone {
+    width: 200px;
+    height: 200px;
+    background: #1e1e1e;
+    border-radius: 50%;
+    border: 2px solid #333;
+    position: relative;
+    cursor: grab;
+    touch-action: none;
+  }
+  .joystick-zone:active { cursor: grabbing; }
+  .joy-knob {
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    transition: background 0.1s;
+  }
+
+  .joystick-label {
+    position: absolute;
+    bottom: -28px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: #666;
+    white-space: nowrap;
+  }
+
+  /* 중앙 버튼 영역 */
+  #center-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+
+  /* 비상정지 버튼 */
+  #estop {
+    width: 110px;
+    height: 110px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #ff6666, #cc0000);
+    border: 4px solid #ff4444;
+    box-shadow: 0 0 20px rgba(255, 68, 68, 0.4);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 1px;
+    color: #fff;
+    transition: transform 0.1s, box-shadow 0.1s;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #estop:active {
+    transform: scale(0.93);
+    box-shadow: 0 0 10px rgba(255, 68, 68, 0.3);
+  }
+
+  #estop .estop-icon { font-size: 28px; }
+
+  /* 키보드 단축키 힌트 */
+  #keyboard-hint {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    padding: 10px;
+    background: #161616;
+    border-top: 1px solid #2a2a2a;
+    font-size: 11px;
+    color: #555;
+  }
+
+  kbd {
+    display: inline-block;
+    padding: 2px 6px;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #aaa;
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+
+<div id="statusbar">
+  <h1>ROBOT CONTROLLER</h1>
+  <div id="conn-status">
+    <div id="conn-dot"></div>
+    <span id="conn-text">연결 중...</span>
+  </div>
+</div>
+
+<div id="values">
+  전진/후진: <span id="val-fb">0.00</span> &nbsp;|&nbsp;
+  좌/우: <span id="val-lr">0.00</span> &nbsp;|&nbsp;
+  회전: <span id="val-flb">0.00</span> &nbsp;|&nbsp;
+  A: <span id="val-a">0</span> &nbsp;B: <span id="val-b">0</span>
+</div>
+
+<div id="controls">
+  <!-- 왼쪽 조이스틱: 전진/후진 + 좌우 -->
+  <div style="position:relative">
+    <div class="joystick-zone" id="joystick-left">
+      <div class="joy-knob" id="knob-left" style="background:radial-gradient(circle at 35% 35%,#6699ff,#2255cc)"></div>
+    </div>
+    <div class="joystick-label">전진 / 후진 · 좌 / 우</div>
+  </div>
+
+  <!-- 중앙 패널 -->
+  <div id="center-panel">
+    <button id="estop" ontouchstart="emergencyStop()" onmousedown="emergencyStop()">
+      <span class="estop-icon">⬛</span>
+      STOP
+    </button>
+  </div>
+
+  <!-- 오른쪽 조이스틱: 회전(FLB) -->
+  <div style="position:relative">
+    <div class="joystick-zone" id="joystick-right">
+      <div class="joy-knob" id="knob-right" style="background:radial-gradient(circle at 35% 35%,#ff9966,#cc4400)"></div>
+    </div>
+    <div class="joystick-label">회전 (FLB)</div>
+  </div>
+</div>
+
+<div id="keyboard-hint">
+  <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 이동</span>
+  <span><kbd>Q</kbd><kbd>E</kbd> 회전</span>
+  <span><kbd>Space</kbd> 비상정지</span>
+  <span><kbd>Z</kbd> A버튼 &nbsp; <kbd>X</kbd> B버튼</span>
+</div>
+
+<script>
+  const SEND_INTERVAL = 50;
+  const JOY_RADIUS    = 75;  // 조이스틱 최대 이동 반경 (px)
+  const KEY_SPEED     = 0.8;
+
+  let state = { FB: 0, LR: 0, FLB: 0, A: 0, B: 0 };
+  let keys  = {};
+
+  // ── Socket.IO 연결 ──────────────────────────────────
+  const socket = io();
+
+  socket.on('connect', () => {
+    document.getElementById('conn-dot').classList.add('connected');
+    document.getElementById('conn-text').textContent = '연결됨';
+  });
+  socket.on('disconnect', () => {
+    document.getElementById('conn-dot').classList.remove('connected');
+    document.getElementById('conn-text').textContent = '끊김';
+  });
+
+  // ── 명령 전송 ───────────────────────────────────────
+  function sendSignal() {
+    if (!socket.connected) return;
+    socket.emit('remote_signal', {
+      data: {
+        A: state.A, B: state.B,
+        FB: +state.FB.toFixed(3),
+        LR: +state.LR.toFixed(3),
+        FLB: +state.FLB.toFixed(3)
+      }
+    });
+    document.getElementById('val-fb').textContent  = state.FB.toFixed(2);
+    document.getElementById('val-lr').textContent  = state.LR.toFixed(2);
+    document.getElementById('val-flb').textContent = state.FLB.toFixed(2);
+    document.getElementById('val-a').textContent   = state.A;
+    document.getElementById('val-b').textContent   = state.B;
+  }
+
+  function emergencyStop() {
+    state = { FB: 0, LR: 0, FLB: 0, A: 0, B: 0 };
+    socket.emit('emergency_stop', {});
+  }
+
+  // ── 커스텀 조이스틱 ─────────────────────────────────
+  // document 위에서 mousemove/mouseup을 추적 → 존 밖으로 나가도 끊기지 않음
+  function makeJoystick(zoneId, knobId, onMove, onRelease) {
+    const zone = document.getElementById(zoneId);
+    const knob = document.getElementById(knobId);
+    let active = false;
+    let cx = 0, cy = 0;
+
+    function getCenter() {
+      const r = zone.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+
+    function update(x, y) {
+      const c = { x: cx, y: cy };
+      let dx = x - c.x;
+      let dy = y - c.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > JOY_RADIUS) {
+        dx = dx * JOY_RADIUS / dist;
+        dy = dy * JOY_RADIUS / dist;
+      }
+      // 노브 위치 업데이트
+      knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+      onMove(dx / JOY_RADIUS, -dy / JOY_RADIUS);  // -dy: 위 = 전진
+    }
+
+    function release() {
+      if (!active) return;
+      active = false;
+      knob.style.transform = 'translate(-50%, -50%)';
+      onRelease();
+    }
+
+    // 마우스
+    zone.addEventListener('mousedown', e => {
+      e.preventDefault();
+      active = true;
+      const c = getCenter();
+      cx = c.x; cy = c.y;
+      update(e.clientX, e.clientY);
+    });
+    document.addEventListener('mousemove', e => {
+      if (active) update(e.clientX, e.clientY);
+    });
+    document.addEventListener('mouseup', () => release());
+
+    // 터치 (모바일)
+    zone.addEventListener('touchstart', e => {
+      e.preventDefault();
+      active = true;
+      const c = getCenter();
+      cx = c.x; cy = c.y;
+      update(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
+    document.addEventListener('touchmove', e => {
+      if (active) update(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
+    document.addEventListener('touchend', () => release());
+  }
+
+  makeJoystick(
+    'joystick-left', 'knob-left',
+    (x, y) => { state.LR = +x.toFixed(3); state.FB = +y.toFixed(3); },
+    ()     => { state.LR = 0; state.FB = 0; }
+  );
+
+  makeJoystick(
+    'joystick-right', 'knob-right',
+    (x, y) => { state.FLB = +x.toFixed(3); },
+    ()     => { state.FLB = 0; }
+  );
+
+  // ── 키보드 조종 ─────────────────────────────────────
+  document.addEventListener('keydown', e => {
+    if (e.repeat) return;
+    keys[e.key.toLowerCase()] = true;
+    updateKeyState();
+    if (e.key === ' ') { e.preventDefault(); emergencyStop(); }
+  });
+  document.addEventListener('keyup', e => {
+    keys[e.key.toLowerCase()] = false;
+    updateKeyState();
+  });
+
+  function updateKeyState() {
+    state.FB  = (keys['w'] ? KEY_SPEED : 0) - (keys['s'] ? KEY_SPEED : 0);
+    state.LR  = (keys['d'] ? KEY_SPEED : 0) - (keys['a'] ? KEY_SPEED : 0);
+    state.FLB = (keys['e'] ? KEY_SPEED : 0) - (keys['q'] ? KEY_SPEED : 0);
+    state.A   = keys['z'] ? 1 : 0;
+    state.B   = keys['x'] ? 1 : 0;
+  }
+
+  // ── 주기적 전송 ─────────────────────────────────────
+  setInterval(sendSignal, SEND_INTERVAL);
+</script>
+</body>
+</html>
